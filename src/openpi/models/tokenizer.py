@@ -117,6 +117,19 @@ class FASTTokenizer:
         return np.asarray(tokens), np.asarray(token_mask), np.asarray(ar_mask), np.asarray(loss_mask)
 
     def extract_actions(self, tokens: np.ndarray, action_horizon: int, action_dim: int) -> np.ndarray:
+        tokens = np.asarray(tokens, dtype=np.int32).reshape(-1)
+        if tokens.size == 0:
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
+        # `sample_actions()` returns a fixed-size token buffer. Trim unused trailing
+        # padding and stop at EOS before decoding the text suffix into FAST tokens.
+        if (eos_idx := np.flatnonzero(tokens == 1)).size > 0:
+            tokens = tokens[: eos_idx[0] + 1]
+        if (non_pad_idx := np.flatnonzero(tokens != 0)).size > 0:
+            tokens = tokens[: non_pad_idx[-1] + 1]
+        else:
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
+
         # Decode predicted output tokens
         decoded_tokens = self._paligemma_tokenizer.decode(tokens.tolist())
 
@@ -125,8 +138,14 @@ class FASTTokenizer:
             return np.zeros((action_horizon, action_dim), dtype=np.float32)
 
         # Extract actions from decoded tokens
+        action_text = decoded_tokens.split("Action: ", 1)[1]
+        if "|" in action_text:
+            action_text = action_text.split("|", 1)[0]
+        action_text = action_text.strip()
+        if not action_text:
+            return np.zeros((action_horizon, action_dim), dtype=np.float32)
         raw_action_tokens = np.array(
-            self._paligemma_tokenizer.encode(decoded_tokens.split("Action: ")[1].split("|")[0].strip())
+            self._paligemma_tokenizer.encode(action_text)
         )
         action_tokens = self._act_tokens_to_paligemma_tokens(raw_action_tokens)
         return self._fast_tokenizer.decode(

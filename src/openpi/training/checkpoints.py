@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures as futures
 import dataclasses
 import logging
+from typing import Any
 from typing import Protocol
 
 from etils import epath
@@ -13,7 +14,6 @@ import orbax.checkpoint.future as future
 
 from openpi.shared import array_typing as at
 import openpi.shared.normalize as _normalize
-import openpi.training.data_loader as _data_loader
 import openpi.training.utils as training_utils
 
 
@@ -45,7 +45,7 @@ def initialize_checkpoint_dir(
             "params": ocp.PyTreeCheckpointHandler(),
         },
         options=ocp.CheckpointManagerOptions(
-            max_to_keep=1,
+            max_to_keep=None,
             keep_period=keep_period,
             create=False,
             async_options=ocp.AsyncOptions(timeout_secs=7200),
@@ -65,7 +65,7 @@ def initialize_checkpoint_dir(
 def save_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader: Any,
     step: int,
 ):
     def save_assets(directory: epath.Path):
@@ -89,7 +89,7 @@ def save_state(
 def restore_state(
     checkpoint_manager: ocp.CheckpointManager,
     state: training_utils.TrainState,
-    data_loader: _data_loader.DataLoader,
+    data_loader: Any,
     step: int | None = None,
 ) -> training_utils.TrainState:
     del data_loader

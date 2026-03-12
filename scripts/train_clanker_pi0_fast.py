@@ -37,35 +37,36 @@ from clanker_config import LeRobotClankerDataConfig
 os.environ.setdefault("OPENPI_DATA_HOME", str(pathlib.Path("./.cache/openpi").resolve()))
 
 PROJECT_NAME = "openpi"
-RUN_NAME = "default"
+RUN_NAME = "h5_repaired_v1"
 
 REPO_ID = "rspcunningham/clanker0-teleop"
 
 ACTION_DIM = 4
-ACTION_HORIZON = 10
+ACTION_HORIZON = 5
 MAX_TOKEN_LEN = 180
 PALIGEMMA_VARIANT = "gemma_2b_lora"
 
 SEED = 42
 BATCH_SIZE = 8
-NUM_WORKERS = 2
-NUM_TRAIN_STEPS = 30_000
-LOG_INTERVAL = 100
-SAVE_INTERVAL = 500
-KEEP_PERIOD = 2_000
+NUM_WORKERS = 0
+NUM_TRAIN_STEPS = 2000
+LOG_INTERVAL = 20
+EVAL_INTERVAL = 100
+SAVE_INTERVAL = 100
+KEEP_PERIOD = 500
 FSDP_DEVICES = 1
 
-OVERWRITE = False
+OVERWRITE = True
 RESUME = False
 WANDB_ENABLED = True
 
 ASSETS_BASE_DIR = "./assets"
 CHECKPOINT_BASE_DIR = "./checkpoints"
 
-WARMUP_STEPS = 1_000
-PEAK_LR = 2.5e-5
+WARMUP_STEPS = 100
+PEAK_LR = 1.0e-5
 DECAY_STEPS = NUM_TRAIN_STEPS
-END_LR = 2.5e-6
+END_LR = 1.0e-6
 ADAM_B1 = 0.9
 ADAM_B2 = 0.95
 ADAM_EPS = 1e-8
@@ -131,6 +132,15 @@ def init_wandb(enabled: bool, project_name: str, exp_name: str, config_dict: dic
 
     wandb.init(name=exp_name, config=config_dict, project=project_name)
     (checkpoint_dir / "wandb_id.txt").write_text(wandb.run.id)
+
+
+def _to_wandb_image(image: np.ndarray) -> np.ndarray:
+    image = np.asarray(image)
+    if image.ndim == 3 and image.shape[0] in (1, 3):
+        image = np.transpose(image, (1, 2, 0))
+    if image.dtype != np.uint8:
+        image = np.clip((image + 1.0) * 127.5, 0, 255).astype(np.uint8)
+    return image
 
 
 def load_weights_and_validate(loader: weight_loaders.WeightLoader, params_shape: at.Params) -> at.Params:
@@ -366,6 +376,7 @@ def main() -> None:
             "max_token_len": MAX_TOKEN_LEN,
             "batch_size": BATCH_SIZE,
             "num_train_steps": NUM_TRAIN_STEPS,
+            "eval_interval": EVAL_INTERVAL,
             "save_interval": SAVE_INTERVAL,
             "paligemma_variant": PALIGEMMA_VARIANT,
         },
@@ -390,7 +401,9 @@ def main() -> None:
     logging.info(f"Initialized data loader:\n{training_utils.array_tree_to_info(batch)}")
 
     images_to_log = [
-        wandb.Image(np.concatenate([np.array(img[i]) for img in batch[0].images.values()], axis=1))
+        wandb.Image(
+            np.concatenate([_to_wandb_image(np.array(img[i])) for img in batch[0].images.values()], axis=1)
+        )
         for i in range(min(5, len(next(iter(batch[0].images.values())))))
     ]
     wandb.log({"camera_views": images_to_log}, step=0)
@@ -440,13 +453,14 @@ def main() -> None:
         if step % LOG_INTERVAL == 0:
             stacked_infos = common_utils.stack_forest(infos)
             reduced_info = jax.device_get(jax.tree.map(jnp.mean, stacked_infos))
-            val_infos = []
-            for val_batch in val_loader:
-                with sharding.set_mesh(mesh):
-                    val_infos.append(peval_step(train_rng, train_state, val_batch))
-            stacked_val_infos = common_utils.stack_forest(val_infos)
-            reduced_val_info = jax.device_get(jax.tree.map(jnp.mean, stacked_val_infos))
-            reduced_info.update(reduced_val_info)
+            if step % EVAL_INTERVAL == 0:
+                val_infos = []
+                for val_batch in val_loader:
+                    with sharding.set_mesh(mesh):
+                        val_infos.append(peval_step(train_rng, train_state, val_batch))
+                stacked_val_infos = common_utils.stack_forest(val_infos)
+                reduced_val_info = jax.device_get(jax.tree.map(jnp.mean, stacked_val_infos))
+                reduced_info.update(reduced_val_info)
             pbar.write("Step {}: {}".format(step, ", ".join(f"{k}={v:.4f}" for k, v in reduced_info.items())))
             wandb.log(reduced_info, step=step)
             infos = []

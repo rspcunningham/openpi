@@ -59,7 +59,7 @@ class LeRobotClankerDataConfig(training_config.DataConfigFactory):
 def make_config() -> training_config.TrainConfig:
     model = pi0_fast.Pi0FASTConfig(
         action_dim=4,
-        action_horizon=10,
+        action_horizon=5,
         max_token_len=180,
         paligemma_variant="gemma_2b_lora",
     )

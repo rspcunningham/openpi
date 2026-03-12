@@ -3,13 +3,16 @@ from __future__ import annotations
 import dataclasses
 import os
 import pathlib
+import warnings
 
+import einops
 import jax
 import numpy as np
 import torch
 
 from openpi.models import model as model_lib
 from openpi.models.tokenizer import FASTTokenizer
+from openpi.shared import image_tools
 import openpi.shared.normalize as normalize
 
 try:
@@ -19,6 +22,13 @@ except ImportError as exc:  # pragma: no cover - depends on local environment
     _LEROBOT_IMPORT_ERROR = exc
 else:
     _LEROBOT_IMPORT_ERROR = None
+
+warnings.filterwarnings(
+    "ignore",
+    message="The video decoding and encoding capabilities of torchvision are deprecated.*",
+    category=UserWarning,
+    module=r"torchvision\.io\._video_deprecation_warning",
+)
 
 
 def _require_new_lerobot() -> None:
@@ -41,6 +51,16 @@ def _normalize_array(x: np.ndarray, stats: normalize.NormStats, *, use_quantiles
     return (x - stats.mean) / (stats.std + 1e-6)
 
 
+def _parse_image(image) -> np.ndarray:
+    image = np.asarray(image)
+    if np.issubdtype(image.dtype, np.floating):
+        image = (255 * image).astype(np.uint8)
+    if image.ndim == 3 and image.shape[0] == 3:
+        image = einops.rearrange(image, "c h w -> h w c")
+    image = image_tools.resize_with_pad(image, 224, 224)
+    return image
+
+
 @dataclasses.dataclass(frozen=True)
 class ClankerDatasetConfig:
     repo_id: str
@@ -57,7 +77,7 @@ class ClankerDatasetConfig:
 
 def discover_episode_indices(repo_id: str, *, root: pathlib.Path | None = None) -> list[int]:
     _require_new_lerobot()
-    dataset = LeRobotDataset(repo_id, root=root or _default_lerobot_root(), force_cache_sync=True)
+    dataset = LeRobotDataset(repo_id, root=root or _default_lerobot_root(), force_cache_sync=False)
     return sorted({int(idx) for idx in dataset.hf_dataset["episode_index"]})
 
 
@@ -76,7 +96,7 @@ class RawClankerDataset:
             root=cfg.root,
             episodes=episodes,
             video_backend=cfg.video_backend,
-            force_cache_sync=True,
+            force_cache_sync=False,
         )
         self.episode_index_col = self.ds.hf_dataset["episode_index"]
 
@@ -118,7 +138,7 @@ class RawClankerDataset:
             prompt = sample.get("task", "")
             if not isinstance(prompt, str):
                 prompt = ""
-            result["image"] = np.asarray(sample[self.cfg.camera_key])
+            result["image"] = _parse_image(sample[self.cfg.camera_key])
             result["prompt"] = prompt
         return result
 
